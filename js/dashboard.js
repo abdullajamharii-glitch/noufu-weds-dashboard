@@ -258,11 +258,8 @@ function loadRsvpTable() {
   empty.style.display = 'none';
   tbody.innerHTML = rsvps.map((r, i) => `
     <tr>
-      <td>${r.name}</td>
-      <td>${r.email || '—'}</td>
       <td>${r.guests || 1}</td>
       <td><span class="badge badge-${r.attending}">${capitalize(r.attending)}</span></td>
-      <td>${r.message || '—'}</td>
       <td>${r.date || '—'}</td>
       <td><button class="btn btn-danger btn-sm" onclick="deleteRsvp(${i})">✕</button></td>
     </tr>
