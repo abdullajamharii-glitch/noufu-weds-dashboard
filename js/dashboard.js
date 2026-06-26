@@ -6,6 +6,31 @@ const STORAGE_KEY   = 'wedding_config';
 const RSVP_KEY      = 'wedding_rsvps';
 const GALLERY_KEY   = 'wedding_gallery_data';
 
+// ─── Supabase Config ───────────────────────────────
+const SB_URL  = 'https://hkivsfozrmlwuyivfspn.supabase.co';
+const SB_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhraXZzZm96cm1sd3V5aXZmc3BuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI0NDU2MDksImV4cCI6MjA5ODAyMTYwOX0.k4W-y7Qa-1kiaXINfyEbpqSqVjlMAKbO8o2lWtHog5Q';
+const SB_HEADERS = {
+  'apikey': SB_KEY,
+  'Authorization': 'Bearer ' + SB_KEY,
+  'Content-Type': 'application/json',
+};
+
+async function sbFetchRsvps() {
+  try {
+    const res = await fetch(`${SB_URL}/rest/v1/rsvps?select=*&order=created_at.asc`, { headers: SB_HEADERS });
+    if (!res.ok) return [];
+    return await res.json();
+  } catch { return []; }
+}
+
+async function sbDeleteRsvp(id) {
+  await fetch(`${SB_URL}/rest/v1/rsvps?id=eq.${id}`, { method: 'DELETE', headers: SB_HEADERS });
+}
+
+async function sbDeleteAllRsvps() {
+  await fetch(`${SB_URL}/rest/v1/rsvps?id=not.is.null`, { method: 'DELETE', headers: SB_HEADERS });
+}
+
 const DEFAULTS = {
   person1: 'Mohammed Noufal',
   person2: 'Khadeejathul Kubra CA',
@@ -49,6 +74,9 @@ function getRsvps() {
   try { return JSON.parse(localStorage.getItem(RSVP_KEY) || '[]'); }
   catch { return []; }
 }
+
+// Cache for async Supabase data used by overview
+let _cachedRsvps = [];
 
 // ─── Toast ─────────────────────────────────────────
 function showToast(msg) {
@@ -97,9 +125,10 @@ function navigate(id) {
 }
 
 // ─── Overview Panel ────────────────────────────────
-function loadOverview() {
+async function loadOverview() {
   const cfg   = getConfig();
-  const rsvps = getRsvps();
+  const rsvps = await sbFetchRsvps();
+  _cachedRsvps = rsvps;
 
   const attending = rsvps.filter(r => r.attending === 'yes').length;
   const notGoing  = rsvps.filter(r => r.attending === 'no').length;
@@ -244,10 +273,16 @@ document.getElementById('remove-music-btn').addEventListener('click', () => {
 });
 
 // ─── RSVP Panel ────────────────────────────────────
-function loadRsvpTable() {
-  const rsvps   = getRsvps();
-  const tbody   = document.getElementById('rsvp-tbody');
-  const empty   = document.getElementById('rsvp-empty');
+async function loadRsvpTable() {
+  const tbody = document.getElementById('rsvp-tbody');
+  const empty = document.getElementById('rsvp-empty');
+  if (!tbody) return;
+
+  tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:20px;opacity:.5;">Loading…</td></tr>';
+  empty.style.display = 'none';
+
+  const rsvps = await sbFetchRsvps();
+  _cachedRsvps = rsvps;
 
   if (!rsvps.length) {
     tbody.innerHTML = '';
@@ -256,39 +291,48 @@ function loadRsvpTable() {
   }
 
   empty.style.display = 'none';
-  tbody.innerHTML = rsvps.map((r, i) => `
+  tbody.innerHTML = rsvps.map((r) => `
     <tr>
       <td>${r.guests || 1}</td>
       <td><span class="badge badge-${r.attending}">${capitalize(r.attending)}</span></td>
       <td>${r.date || '—'}</td>
-      <td><button class="btn btn-danger btn-sm" onclick="deleteRsvp(${i})">✕</button></td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteRsvp('${r.id}')">✕</button></td>
     </tr>
   `).join('');
+
+  // Refresh overview stats too
+  loadOverviewFromCache(rsvps);
 }
 
-function deleteRsvp(index) {
-  const rsvps = getRsvps();
-  rsvps.splice(index, 1);
-  localStorage.setItem(RSVP_KEY, JSON.stringify(rsvps));
+async function deleteRsvp(id) {
+  await sbDeleteRsvp(id);
   loadRsvpTable();
-  loadOverview();
   showToast('RSVP entry deleted');
 }
 
-function clearAllRsvps() {
+async function clearAllRsvps() {
   if (!confirm('Clear ALL RSVP entries? This cannot be undone.')) return;
-  localStorage.removeItem(RSVP_KEY);
+  await sbDeleteAllRsvps();
   loadRsvpTable();
-  loadOverview();
   showToast('All RSVPs cleared');
 }
 
-function exportRsvps() {
-  const rsvps = getRsvps();
+function loadOverviewFromCache(rsvps) {
+  const attending   = rsvps.filter(r => r.attending === 'yes').length;
+  const notGoing    = rsvps.filter(r => r.attending === 'no').length;
+  const totalGuests = rsvps.filter(r => r.attending === 'yes').reduce((a, r) => a + (r.guests || 1), 0);
+  setEl('stat-total-rsvp',    rsvps.length);
+  setEl('stat-attending',     attending);
+  setEl('stat-not-attending', notGoing);
+  setEl('stat-total-guests',  totalGuests);
+}
+
+async function exportRsvps() {
+  const rsvps = await sbFetchRsvps();
   if (!rsvps.length) { showToast('No RSVPs to export'); return; }
 
-  const headers = ['Name', 'Email', 'Guests', 'Attending', 'Message', 'Date'];
-  const rows = rsvps.map(r => [r.name, r.email, r.guests, r.attending, r.message, r.date].join(','));
+  const headers = ['Guests', 'Attending', 'Date'];
+  const rows = rsvps.map(r => [r.guests || 1, r.attending, r.date].join(','));
   const csv = [headers.join(','), ...rows].join('\n');
 
   const blob = new Blob([csv], { type: 'text/csv' });
@@ -409,6 +453,12 @@ document.addEventListener('DOMContentLoaded', () => {
   loadOverview();
   loadGeneralSettings();
   loadMusicSettings();
+
+  // Auto-refresh RSVP stats every 30 seconds
+  setInterval(() => {
+    if (currentPanel === 'overview') loadOverview();
+    if (currentPanel === 'rsvp') loadRsvpTable();
+  }, 30000);
 
   // Start on overview
   navigate('overview');
